@@ -1,0 +1,254 @@
+#!/usr/bin/perl
+
+#  Reads a cisco config file, and returns interface information on
+#  a single line -- useful to rip through config files and put
+#  info into spreadsheet formats...
+
+#  Loops through entire config, and stores info whever it matches
+#  "interesting" lines.   Each time it finds a "new" interface
+#  the current data gets dumped to STDOUT
+
+#  Currently grabs info for:
+#   -- Interface name
+#   -- y/n flag if interface is shutdown
+#   -- IP address
+#   -- y/n flag if any secondary IP addresses exist
+#   -- IPv6 address
+#   -- y/n flag if any secondary IPv6 addresses exist
+#   -- VRF name
+#   -- Interface description
+#   -- VLAN of port
+#   -- allowed VLANS on trunk port
+
+
+
+
+use Getopt::Std;
+
+
+# Setup 
+$Delimiter = "	";  # Output delimiter is <tab> by default
+
+#  Deal with command line options
+
+if (!getopts('cd:f:h')  or $opt_h)
+   {
+   &usage;
+   exit 1;
+   }
+
+$infile    = $opt_f if ($opt_f);
+$Delimiter = $opt_d if ($opt_d);
+$ColHeader = $opt_c if ($opt_c);
+
+
+############################################################
+# usage - how to use this utility
+#
+sub usage
+   {
+   print "--- $0:\n";
+   print "  - a cisco config interface info shredder\n";
+   print "\n";
+   print "useful options:\n";
+   print "  [-c] include column headers\n";
+   print "  [-f <file>] file to use as input\n";
+   print "  [-d <char>] delimiter character (defaults to <tab>)\n";
+   }
+
+####################
+# InitVars --  Since we're doing everything in global namespace, 
+#              this will work fine
+sub InitVars
+   {
+   $Int          = "";
+   $Shut         = "N";
+   $Desc         = "";
+   $IPaddr       = "N/A";
+   $NetMask      = "N/A";
+   $SecIP        = "N";
+   $IP6addr      = "N/A";
+   $SecIP6       = "N";
+   $VRF          = "N/A";
+   $VLAN         = "N/A";
+   $allowedVLANs = "N/A";
+   }
+
+####################
+# PrintColumnHeader -- print headers for each line if desired
+sub PrintColumnHeader
+   {
+   print "Interface",             "$Delimiter";
+   print "Shutdown?",             "$Delimiter";
+   print "IP address",            "$Delimiter";
+   print "Netmask",               "$Delimiter";
+   print "Sec. Address?",         "$Delimiter";
+   print "IPv6 address",          "$Delimiter";
+   print "Sec. v6 Address?",      "$Delimiter";
+   print "VRF Descriminator",     "$Delimiter";
+   print "Interface Description", "$Delimiter";
+   print "VLAN",                  "$Delimiter";
+   print "allowed VLANs",         "$Delimiter";
+   print "\n";
+   
+   InitVars();
+   return;
+   }
+
+####################
+# PrintCurrentInfo -- write out interface and descriptions
+#                       then clears variables
+sub PrintCurrentInfo
+   {
+   return if (! $Int);
+   print "$Int",           "$Delimiter";
+   print "$Shut",          "$Delimiter";
+   print "$IPaddr",        "$Delimiter";
+   print "$NetMask",       "$Delimiter";
+   print "$SecIP",         "$Delimiter";
+   print "$IP6addr",       "$Delimiter";
+   print "$SecIP6",        "$Delimiter";
+   print "$VRF",           "$Delimiter";
+   print "$Desc",          "$Delimiter";
+   print "$VLAN",          "$Delimiter";
+   print "$allowedVLANs",  "$Delimiter";
+   print "\n";
+   
+   
+   InitVars();
+   return;
+   }
+
+
+
+
+
+############################################################
+# begin Main
+#
+#
+# Setup input and output file handles
+if ($infile)
+   {
+   open(IN, "<$infile") || die "Couldn't open $infile for input\n";
+   }
+else
+   {
+   open (IN, "<&STDIN")
+   }
+
+
+#
+#  Initialize temp variables for interface and descriptions
+InitVars();
+PrintColumnHeader() if ($ColHeader);
+
+
+
+
+#  Process the input file until it is done
+
+while ( <IN> )
+   {
+   chomp; 				# get rid of linefeed
+   next if ((/^\s*!/) or /^\s?$/ );	# whitespace and comments ignored
+   s/^\s*//;				# strip leading whitespace
+   s/\s*$//;				# strip trailing whitespace
+   $dataLine = $_;			# put data in a readily accessible variable
+
+# Grab lines describing interfaces
+   if ($dataLine =~ /^interface/)
+      {
+      PrintCurrentInfo();
+      $Int = $dataLine;
+      $Int =~ s/^interface//;
+      }
+
+# Grab shutdown lines
+   if ($dataLine =~ /^shutdown/)
+      {
+      $Shut = "Y";
+      }
+
+# Grab description lines
+   if ($dataLine =~ /^description/)
+      {
+      $Desc = $dataLine;
+      $Desc =~ s/^description//;
+      }
+
+# Grab IP address lines
+   if ($dataLine =~ /^ip address/)
+      {
+      if ($dataLine =~ /secondary/)
+         {
+         $SecIP = "Y";
+         }
+      else
+         {
+         ($a, $b, $IPaddr, $NetMask, @rest) = split ("\ ", $dataLine);
+         }
+      }
+
+# Grab IPv6 address lines
+   if ($dataLine =~ /^ipv6 address/)
+      {
+      if ($dataLine =~ /secondary/)
+         {
+         $SecIP6 = "Y";
+         }
+      else
+         {
+         $IP6addr = $dataLine;
+         $IP6addr =~ s/^ipv6 address//;
+         }
+      }
+
+
+# Grab VRF intface info
+   if ($dataLine =~ /^ip vrf forwarding/)
+      {
+      $VRF = $dataLine;
+      $VRF =~ s/^ip vrf forwarding//;
+      }
+
+#
+# Deal with switchport info
+
+# default to VLAN 1 if a switchport, and not VLAN defined
+#   if ( ($dataLine =~ /^switchport mode access/)  && (! $VLAN) )
+   if ($dataLine =~ /^switchport mode access/)
+      {
+      $VLAN = "1" if (! $VLAN);
+      }
+
+
+# Grab switchport VLAN info
+   if ($dataLine =~ /^switchport access vlan/)
+      {
+      $VLAN = $dataLine;
+      $VLAN =~ s/^switchport access vlan//;
+      $VLAN =~ s/^\s*//;
+      }
+# Grab trunk  allowed VLANS info
+   if ($dataLine =~ /^switchport trunk allowed vlan/)
+      {
+      $allowedVLANs = $dataLine;
+      $allowedVLANs =~ s/^switchport trunk allowed vlan//;
+      }
+
+
+
+   }  # END of file input
+
+
+
+
+#
+# Since we only print when we get to a new "interface" line, we miss the
+# info for the "last" interface.  We need to dump that now too.
+PrintCurrentInfo();
+
+
+exit(0);
+
